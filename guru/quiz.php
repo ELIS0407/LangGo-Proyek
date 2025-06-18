@@ -167,7 +167,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_quiz'])) {
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -563,7 +563,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_quiz'])) {
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="chat.php" class="nav-item">

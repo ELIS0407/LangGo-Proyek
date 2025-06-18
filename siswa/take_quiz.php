@@ -78,6 +78,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['submit_quiz'])) {
     mysqli_stmt_bind_param($stmt, "iii", $quiz_data['id'], $user_id, $score);
     mysqli_stmt_execute($stmt);
     
+    // Include activity tracker and record quiz attempt activity
+    include_once "../user_activity_tracker.php";
+    track_user_activity($user_id, 'quiz_attempt', $conn);
+    
     header("Location: quiz_result.php?score=" . $score . "&quiz=" . urlencode($quiz_data['title']));
     exit;
 }
@@ -125,7 +129,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['submit_quiz'])) {
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -311,7 +315,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['submit_quiz'])) {
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="class.php" class="nav-item">

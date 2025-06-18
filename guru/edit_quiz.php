@@ -18,34 +18,42 @@ if ($row = mysqli_fetch_assoc($result)) {
     $user_id = $row['id'];
 }
 
-if (!isset($_GET['id'])) {
-    header("location: quiz.php");
-    exit;
-}
-
-$quiz_id = $_GET['id'];
+$is_new_quiz = !isset($_GET['id']);
+$quiz_id = $is_new_quiz ? null : $_GET['id'];
 $quiz_data = null;
 $quiz_questions = [];
+$page_title = $is_new_quiz ? "Create New Quiz" : "Edit Quiz";
 
-$stmt = mysqli_prepare($conn, "SELECT * FROM quizzes WHERE id = ? AND created_by = ?");
-mysqli_stmt_bind_param($stmt, "ii", $quiz_id, $user_id);
-mysqli_stmt_execute($stmt);
-$result = mysqli_stmt_get_result($stmt);
-
-if ($row = mysqli_fetch_assoc($result)) {
-    $quiz_data = $row;
-    
-    $stmt = mysqli_prepare($conn, "SELECT * FROM quiz_questions WHERE quiz_id = ? ORDER BY id");
-    mysqli_stmt_bind_param($stmt, "i", $quiz_id);
+if (!$is_new_quiz) {
+    // Editing an existing quiz
+    $stmt = mysqli_prepare($conn, "SELECT * FROM quizzes WHERE id = ? AND created_by = ?");
+    mysqli_stmt_bind_param($stmt, "ii", $quiz_id, $user_id);
     mysqli_stmt_execute($stmt);
     $result = mysqli_stmt_get_result($stmt);
-    
-    while ($row = mysqli_fetch_assoc($result)) {
-        $quiz_questions[] = $row;
+
+    if ($row = mysqli_fetch_assoc($result)) {
+        $quiz_data = $row;
+        
+        $stmt = mysqli_prepare($conn, "SELECT * FROM quiz_questions WHERE quiz_id = ? ORDER BY id");
+        mysqli_stmt_bind_param($stmt, "i", $quiz_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        
+        while ($row = mysqli_fetch_assoc($result)) {
+            $quiz_questions[] = $row;
+        }
+    } else {
+        header("location: quiz.php");
+        exit;
     }
 } else {
-    header("location: quiz.php");
-    exit;
+    // Creating a new quiz
+    $quiz_data = [
+        'title' => '',
+        'description' => '',
+        'class_level' => 'basic',
+        'code' => ''
+    ];
 }
 
 $error_message = '';
@@ -59,17 +67,37 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_quiz'])) {
     if (empty($title)) {
         $error_message = "Quiz title is required.";
     } else {
-        $stmt = mysqli_prepare($conn, "UPDATE quizzes SET title = ?, description = ?, class_level = ? WHERE id = ?");
-        mysqli_stmt_bind_param($stmt, "sssi", $title, $description, $class_level, $quiz_id);
-        
-        if (mysqli_stmt_execute($stmt)) {
-            $success_message = "Quiz updated successfully!";
+        if ($is_new_quiz) {
+            // Generate a unique code for the quiz
+            $code = generateQuizCode();
             
-            $quiz_data['title'] = $title;
-            $quiz_data['description'] = $description;
-            $quiz_data['class_level'] = $class_level;
+            $stmt = mysqli_prepare($conn, "INSERT INTO quizzes (title, description, class_level, code, created_by) VALUES (?, ?, ?, ?, ?)");
+            mysqli_stmt_bind_param($stmt, "ssssi", $title, $description, $class_level, $code, $user_id);
+            
+            if (mysqli_stmt_execute($stmt)) {
+                $quiz_id = mysqli_insert_id($conn);
+                $success_message = "Quiz created successfully!";
+                
+                // Redirect to edit the newly created quiz
+                header("location: quiz.php?id=" . $quiz_id);
+                exit;
+            } else {
+                $error_message = "Error creating quiz: " . mysqli_error($conn);
+            }
         } else {
-            $error_message = "Error updating quiz: " . mysqli_error($conn);
+            // Update existing quiz
+            $stmt = mysqli_prepare($conn, "UPDATE quizzes SET title = ?, description = ?, class_level = ? WHERE id = ?");
+            mysqli_stmt_bind_param($stmt, "sssi", $title, $description, $class_level, $quiz_id);
+            
+            if (mysqli_stmt_execute($stmt)) {
+                $success_message = "Quiz updated successfully!";
+                
+                $quiz_data['title'] = $title;
+                $quiz_data['description'] = $description;
+                $quiz_data['class_level'] = $class_level;
+            } else {
+                $error_message = "Error updating quiz: " . mysqli_error($conn);
+            }
         }
     }
 }
@@ -80,13 +108,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_question'])) {
     $option_b = trim($_POST['option_b']);
     $option_c = trim($_POST['option_c']);
     $option_d = trim($_POST['option_d']);
-    $correct_answer = $_POST['correct_answer'];
+    $correct_answers = isset($_POST['correct_answers']) ? $_POST['correct_answers'] : [];
     
-    if (empty($question) || empty($option_a) || empty($option_b) || empty($option_c) || empty($option_d)) {
-        $error_message = "All fields are required.";
+    if (empty($question) || empty($option_a) || empty($option_b) || empty($option_c) || empty($option_d) || empty($correct_answers)) {
+        $error_message = "All fields are required and at least one correct answer must be selected.";
     } else {
+        $correct_answer_str = implode(',', $correct_answers);
         $stmt = mysqli_prepare($conn, "INSERT INTO quiz_questions (quiz_id, question, option_a, option_b, option_c, option_d, correct_answer) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        mysqli_stmt_bind_param($stmt, "issssss", $quiz_id, $question, $option_a, $option_b, $option_c, $option_d, $correct_answer);
+        mysqli_stmt_bind_param($stmt, "issssss", $quiz_id, $question, $option_a, $option_b, $option_c, $option_d, $correct_answer_str);
         
         if (mysqli_stmt_execute($stmt)) {
             $success_message = "Question added successfully!";
@@ -128,6 +157,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
         $error_message = "Error deleting question: " . mysqli_error($conn);
     }
 }
+
+// Function to generate a unique quiz code
+function generateQuizCode($length = 6) {
+    $characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    $code = '';
+    for ($i = 0; $i < $length; $i++) {
+        $code .= $characters[rand(0, strlen($characters) - 1)];
+    }
+    return $code;
+}
 ?>
 
 <!DOCTYPE html>
@@ -135,7 +174,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Edit Quiz - LangGo!</title>
+    <title><?php echo $page_title; ?> - LangGo!</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
@@ -172,7 +211,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -501,7 +540,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="dashboard.php" class="nav-item">
@@ -529,11 +568,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
             <div class="breadcrumb">
                 <a href="quiz.php">Quiz Management</a>
                 <span class="separator">></span>
-                <span class="current">Edit Quiz</span>
+                <span class="current"><?php echo $page_title; ?></span>
             </div>
             
-            <h1 class="page-title">Edit Quiz</h1>
-            <p class="page-subtitle"><?php echo htmlspecialchars($quiz_data['title']); ?></p>
+            <h1 class="page-title"><?php echo $page_title; ?></h1>
+            <?php if (!$is_new_quiz): ?>
+                <p class="page-subtitle"><?php echo htmlspecialchars($quiz_data['title']); ?></p>
+            <?php endif; ?>
             
             <div class="quiz-container">
                 <?php if (!empty($error_message)): ?>
@@ -550,6 +591,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
                         Quiz Information
                     </h2>
                     
+                    <?php if (!$is_new_quiz && !empty($quiz_data['code'])): ?>
                     <div>
                         <strong>Quiz Code:</strong>
                         <span class="quiz-code" id="quizCode"><?php echo htmlspecialchars($quiz_data['code']); ?></span>
@@ -557,6 +599,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
                             <i class="fas fa-copy"></i>
                         </button>
                     </div>
+                    <?php endif; ?>
                     
                     <form class="quiz-form" method="post" action="" style="margin-top: 20px;">
                         <div class="form-group">
@@ -581,12 +624,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
                         <div class="form-group">
                             <button type="submit" name="update_quiz" class="submit-btn">
                                 <i class="fas fa-save"></i>
-                                Update Quiz
+                                <?php echo $is_new_quiz ? 'Create Quiz' : 'Update Quiz'; ?>
                             </button>
                         </div>
                     </form>
                 </div>
                 
+                <?php if (!$is_new_quiz): ?>
                 <div class="divider"></div>
                 
                 <div class="questions-section">
@@ -604,19 +648,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
                                     <div class="question-text"><?php echo htmlspecialchars($question['question']); ?></div>
                                     <div class="options-list">
                                         <div class="option-item">
-                                            <span class="option-label <?php echo $question['correct_answer'] === 'A' ? 'correct' : ''; ?>">A</span>
+                                            <span class="option-label <?php echo in_array('A', explode(',', $question['correct_answer'])) ? 'correct' : ''; ?>">A</span>
                                             <?php echo htmlspecialchars($question['option_a']); ?>
                                         </div>
                                         <div class="option-item">
-                                            <span class="option-label <?php echo $question['correct_answer'] === 'B' ? 'correct' : ''; ?>">B</span>
+                                            <span class="option-label <?php echo in_array('B', explode(',', $question['correct_answer'])) ? 'correct' : ''; ?>">B</span>
                                             <?php echo htmlspecialchars($question['option_b']); ?>
                                         </div>
                                         <div class="option-item">
-                                            <span class="option-label <?php echo $question['correct_answer'] === 'C' ? 'correct' : ''; ?>">C</span>
+                                            <span class="option-label <?php echo in_array('C', explode(',', $question['correct_answer'])) ? 'correct' : ''; ?>">C</span>
                                             <?php echo htmlspecialchars($question['option_c']); ?>
                                         </div>
                                         <div class="option-item">
-                                            <span class="option-label <?php echo $question['correct_answer'] === 'D' ? 'correct' : ''; ?>">D</span>
+                                            <span class="option-label <?php echo in_array('D', explode(',', $question['correct_answer'])) ? 'correct' : ''; ?>">D</span>
                                             <?php echo htmlspecialchars($question['option_d']); ?>
                                         </div>
                                     </div>
@@ -677,22 +721,22 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
                             </div>
                             
                             <div class="form-group">
-                                <label class="form-label">Correct Answer</label>
-                                <div class="radio-group">
-                                    <label class="radio-item">
-                                        <input type="radio" name="correct_answer" value="A" required>
+                                <label class="form-label">Correct Answer(s)</label>
+                                <div class="checkbox-group">
+                                    <label class="checkbox-item">
+                                        <input type="checkbox" name="correct_answers[]" value="A">
                                         A
                                     </label>
-                                    <label class="radio-item">
-                                        <input type="radio" name="correct_answer" value="B">
+                                    <label class="checkbox-item">
+                                        <input type="checkbox" name="correct_answers[]" value="B">
                                         B
                                     </label>
-                                    <label class="radio-item">
-                                        <input type="radio" name="correct_answer" value="C">
+                                    <label class="checkbox-item">
+                                        <input type="checkbox" name="correct_answers[]" value="C">
                                         C
                                     </label>
-                                    <label class="radio-item">
-                                        <input type="radio" name="correct_answer" value="D">
+                                    <label class="checkbox-item">
+                                        <input type="checkbox" name="correct_answers[]" value="D">
                                         D
                                     </label>
                                 </div>
@@ -707,6 +751,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
                         </form>
                     </div>
                 </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -721,9 +766,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_question'])) {
             document.execCommand('copy');
             document.body.removeChild(textArea);
             
-
             alert('Quiz code copied to clipboard!');
         }
     </script>
 </body>
-</html> 
+</html>

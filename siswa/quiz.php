@@ -121,7 +121,7 @@ if ($user_id) {
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -282,7 +282,7 @@ if ($user_id) {
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="class.php" class="nav-item">
@@ -305,7 +305,6 @@ if ($user_id) {
             <div class="user-info">
                 <div>
                     <?php echo $username; ?>
-                    <div class="user-level">Advanced</div>
                 </div>
             </div>
         </div>

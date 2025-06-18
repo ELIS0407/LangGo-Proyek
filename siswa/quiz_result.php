@@ -81,7 +81,7 @@ if ($score >= 80) {
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -275,7 +275,7 @@ if ($score >= 80) {
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="class.php" class="nav-item">
