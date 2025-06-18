@@ -2,8 +2,7 @@
 session_start();
 include '../config.php';
 
-
-if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
+if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true || $_SESSION['role'] !== 'guru') {
     header("location: ../login.php");
     exit;
 }
@@ -30,7 +29,6 @@ if ($row = mysqli_fetch_assoc($result)) {
             $upload_path = "../assets/img/profiles/" . $new_file_name;
             
             if (move_uploaded_file($file_tmp, $upload_path)) {
-
                 $profile_image_path = "assets/img/profiles/" . $new_file_name;
                 
                 $check_column = mysqli_query($conn, "SHOW COLUMNS FROM users LIKE 'profile_image'");
@@ -60,6 +58,7 @@ if ($row = mysqli_fetch_assoc($result)) {
 } else {
     $response['message'] = "User not found";
 }
+
 
 header('Content-Type: application/json');
 echo json_encode($response);
