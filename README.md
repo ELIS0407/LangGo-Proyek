@@ -9,7 +9,7 @@ Aplikasi web untuk belajar bahasa dengan cepat dan seru.
 3. Buka phpMyAdmin di browser (http://localhost/phpmyadmin)
 4. Buat database baru dengan nama `langgo_db`
 5. Import file `setup_database.sql` ke dalam database yang baru dibuat
-6. Akses aplikasi melalui browser (http://localhost/Joki-pertama)
+6. Akses aplikasi melalui browser (http://localhost/(nama folder)
 
 ## Informasi Login
 
