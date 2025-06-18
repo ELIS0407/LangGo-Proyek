@@ -7,53 +7,110 @@ if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true || $_SESSION
     exit;
 }
 
-$class = isset($_GET['class']) ? $_GET['class'] : 'basic';
-$level = isset($_GET['level']) ? intval($_GET['level']) : 1;
-
-$class_title = ucfirst($class);
-
 $username = $_SESSION['username'];
 $userId = $_SESSION['user_id'];
 
-$check_level_query = "SELECT * FROM user_progress WHERE user_id = {$userId} AND class_level = '{$class}' AND level_number = {$level}";
-$level_exists = mysqli_query($conn, $check_level_query);
-if (mysqli_num_rows($level_exists) == 0) {
-    mysqli_query($conn, "INSERT INTO user_progress (user_id, class_level, level_number, completed) VALUES ({$userId}, '{$class}', {$level}, FALSE)");
-}
-
-$level_completed = false;
-$level_status_query = "SELECT completed FROM user_progress WHERE user_id = {$userId} AND class_level = '{$class}' AND level_number = {$level}";
-$status_result = mysqli_query($conn, $level_status_query);
-if ($status_row = mysqli_fetch_assoc($status_result)) {
-    $level_completed = (bool)$status_row['completed'];
-}
-
-if (isset($_POST['mark_completed']) && !$level_completed) {
-    mysqli_query($conn, "UPDATE user_progress SET completed = TRUE, completed_at = NOW() WHERE user_id = {$userId} AND class_level = '{$class}' AND level_number = {$level}");
+// Check if user_progress table exists, if not create it and initialize user's progress
+$check_table_query = "SHOW TABLES LIKE 'user_progress'";
+$table_exists = mysqli_query($conn, $check_table_query);
+if (mysqli_num_rows($table_exists) == 0) {
+    $create_table_query = "CREATE TABLE user_progress (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        class_level ENUM('basic', 'intermediate', 'advanced') NOT NULL,
+        level_number INT NOT NULL,
+        completed BOOLEAN DEFAULT FALSE,
+        completed_at TIMESTAMP NULL,
+        UNIQUE KEY user_class_level (user_id, class_level, level_number),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )";
+    mysqli_query($conn, $create_table_query);
     
-    $next_level = $level + 1;
-    if ($next_level <= 15) { // 15 is the max level per class
-        $check_next_query = "SELECT * FROM user_progress WHERE user_id = {$userId} AND class_level = '{$class}' AND level_number = {$next_level}";
-        $next_exists = mysqli_query($conn, $check_next_query);
-        if (mysqli_num_rows($next_exists) == 0) {
-            mysqli_query($conn, "INSERT INTO user_progress (user_id, class_level, level_number, completed) VALUES ({$userId}, '{$class}', {$next_level}, FALSE)");
-        }
+    // Initialize level 1 for all existing students
+    $get_users_query = "SELECT id FROM users WHERE role = 'siswa'";
+    $users_result = mysqli_query($conn, $get_users_query);
+    while ($user = mysqli_fetch_assoc($users_result)) {
+        mysqli_query($conn, "INSERT INTO user_progress (user_id, class_level, level_number, completed) VALUES ({$user['id']}, 'basic', 1, FALSE)");
+    }
+}
+
+// Get the class level from URL parameter
+$class_level = isset($_GET['level']) ? $_GET['level'] : 'basic';
+
+// Validate class level
+if (!in_array($class_level, ['basic', 'intermediate', 'advanced'])) {
+    $class_level = 'basic';
+}
+
+// Check if intermediate level is accessible
+$basic_level10_completed = false;
+if ($class_level == 'intermediate') {
+    $check_query = "SELECT completed FROM user_progress 
+                   WHERE user_id = $userId AND class_level = 'basic' AND level_number = 10";
+    $result = mysqli_query($conn, $check_query);
+    
+    if ($row = mysqli_fetch_assoc($result)) {
+        $basic_level10_completed = $row['completed'];
     }
     
-    header("Location: level_content.php?class={$class}&level={$level}&completed=1");
-    exit;
+    if (!$basic_level10_completed) {
+        // Redirect to basic level if intermediate is not accessible
+        header("Location: level_content.php?level=basic");
+        exit;
+    }
 }
 
-$difficulty = "Easy";
-if ($class == 'intermediate') {
-    $difficulty = $level <= 5 ? "Medium" : "Challenging";
-} elseif ($class == 'advanced') {
-    $difficulty = $level <= 5 ? "Hard" : "Very Hard";
-} elseif ($level > 10) {
-    $difficulty = "Medium";
+// Check if advanced level is accessible
+$intermediate_level10_completed = false;
+if ($class_level == 'advanced') {
+    $check_query = "SELECT completed FROM user_progress 
+                   WHERE user_id = $userId AND class_level = 'intermediate' AND level_number = 10";
+    $result = mysqli_query($conn, $check_query);
+    
+    if ($row = mysqli_fetch_assoc($result)) {
+        $intermediate_level10_completed = $row['completed'];
+    }
+    
+    if (!$intermediate_level10_completed) {
+        // Redirect to intermediate level if advanced is not accessible
+        header("Location: level_content.php?level=intermediate");
+        exit;
+    }
 }
 
-$lesson_title = "Lesson $level: " . ($class == 'basic' ? 'Basic ' : ($class == 'intermediate' ? 'Intermediate ' : 'Advanced ')) . "Concepts";
+// Get user's progress for the selected class level
+$progress_query = "SELECT level_number, completed FROM user_progress 
+                  WHERE user_id = {$userId} AND class_level = '{$class_level}'";
+$progress_result = mysqli_query($conn, $progress_query);
+
+$user_progress = [];
+while ($row = mysqli_fetch_assoc($progress_result)) {
+    $user_progress[$row['level_number']] = $row['completed'];
+}
+
+// Initialize progress for levels that don't have entries yet
+for ($i = 1; $i <= 10; $i++) {
+    if (!isset($user_progress[$i])) {
+        // Insert a record for this level if it doesn't exist
+        $insert_query = "INSERT IGNORE INTO user_progress (user_id, class_level, level_number, completed) 
+                        VALUES ($userId, '$class_level', $i, FALSE)";
+        mysqli_query($conn, $insert_query);
+        $user_progress[$i] = false;
+    }
+}
+
+// Get completed levels count for this user and class level
+$completed_count_query = "SELECT COUNT(*) as completed_count FROM user_progress 
+                         WHERE user_id = $userId AND class_level = '$class_level' AND completed = 1";
+$completed_result = mysqli_query($conn, $completed_count_query);
+$completed_count = 0;
+
+if ($row = mysqli_fetch_assoc($completed_result)) {
+    $completed_count = $row['completed_count'];
+}
+
+// For this implementation, only level 1 is unlocked by default
+// Other levels are locked regardless of completion status
 ?>
 
 <!DOCTYPE html>
@@ -61,7 +118,7 @@ $lesson_title = "Lesson $level: " . ($class == 'basic' ? 'Basic ' : ($class == '
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Level <?php echo $level; ?> - <?php echo $class_title; ?> Class - LangGo!</title>
+    <title><?php echo ucfirst($class_level); ?> Class - LangGo!</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
@@ -98,7 +155,7 @@ $lesson_title = "Lesson $level: " . ($class == 'basic' ? 'Basic ' : ($class == '
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -128,202 +185,110 @@ $lesson_title = "Lesson $level: " . ($class == 'basic' ? 'Basic ' : ($class == '
             display: flex;
             align-items: center;
             gap: 10px;
-            color: white;
-        }
-        
-        .user-level {
-            font-size: 12px;
-            color: #ccc;
         }
         
         .main-content {
             flex: 1;
-            padding: 20px;
-        }
-        
-        .level-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        
-        .level-title {
-            font-size: 24px;
-            color: #3f6791;
-            font-weight: 500;
-        }
-        
-        .back-button {
-            background-color: #3f6791;
-            color: white;
-            padding: 8px 15px;
-            border-radius: 5px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        
-        .level-content {
-            background-color: white;
-            border-radius: 10px;
-            padding: 30px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        
-        .level-info {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 20px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #eee;
-        }
-        
-        .info-item {
             display: flex;
             flex-direction: column;
             align-items: center;
+            padding: 40px 20px;
         }
         
-        .info-label {
-            font-size: 14px;
-            color: #666;
-            margin-bottom: 5px;
-        }
-        
-        .info-value {
-            font-size: 18px;
-            font-weight: 500;
+        .class-title {
+            font-size: 28px;
             color: #3f6791;
-        }
-        
-        .lesson-section {
-            margin-bottom: 30px;
-        }
-        
-        .lesson-title {
-            font-size: 20px;
-            margin-bottom: 15px;
-            color: #333;
-        }
-        
-        .exercise-section {
-            margin-top: 30px;
-        }
-        
-        .exercise-title {
-            font-size: 20px;
-            margin-bottom: 15px;
-            color: #333;
-        }
-        
-        .exercise-item {
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-        }
-        
-        .exercise-question {
+            margin-bottom: 40px;
             font-weight: 500;
+        }
+        
+        .level-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 20px;
+            width: 100%;
+            max-width: 1000px;
+        }
+        
+        .level-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-decoration: none;
+            color: #333;
+        }
+        
+        .level-circle {
+            width: 85px;
+            height: 85px;
+            border-radius: 50%;
+            background-color: #9b8b16;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             margin-bottom: 10px;
         }
         
-        .options {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+        .level-circle i {
+            font-size: 32px;
+            color: #f5f5f5;
         }
         
-        .option {
+        .level-number {
+            font-size: 18px;
+            font-weight: 500;
+        }
+        
+        .level-locked .level-circle {
+            background-color: #999;
+            position: relative;
+        }
+        
+        .level-locked .level-number {
+            color: #999;
+        }
+        
+        .lock-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
             display: flex;
+            justify-content: center;
             align-items: center;
-            gap: 10px;
-            padding: 10px;
-            background-color: white;
-            border: 1px solid #ddd;
+            color: white;
+            font-size: 24px;
+        }
+        
+        .back-button {
+            position: absolute;
+            top: 100px;
+            left: 20px;
+            background-color: #3f6791;
+            color: white;
+            border: none;
+            padding: 10px 15px;
             border-radius: 5px;
             cursor: pointer;
-            transition: background-color 0.3s;
-        }
-        
-        .option:hover {
-            background-color: #f0f7ff;
-        }
-        
-        .option input {
-            margin-right: 10px;
-        }
-        
-        .navigation-buttons {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 30px;
-        }
-        
-        .nav-button {
-            padding: 10px 20px;
-            border-radius: 5px;
-            text-decoration: none;
             display: flex;
             align-items: center;
             gap: 5px;
-        }
-        
-        .prev-button {
-            background-color: #6c757d;
-            color: white;
-        }
-        
-        .next-button {
-            background-color: #3f6791;
-            color: white;
-        }
-        
-        .complete-button {
-            background-color: #28a745;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
-            border: none;
-            cursor: pointer;
+            text-decoration: none;
             font-size: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 20px;
-            transition: background-color 0.3s;
-        }
-        
-        .complete-button:hover {
-            background-color: #218838;
-        }
-        
-        .complete-button.completed {
-            background-color: #6c757d;
-            cursor: default;
-        }
-        
-        .completion-status {
-            text-align: center;
-            margin: 20px 0;
-            padding: 12px;
-            background-color: #d4edda;
-            color: #155724;
-            border-radius: 5px;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
         }
         
         @media (max-width: 768px) {
-            .level-info {
-                flex-direction: column;
-                gap: 15px;
-                align-items: center;
+            .level-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .level-grid {
+                grid-template-columns: repeat(2, 1fr);
             }
         }
     </style>
@@ -332,7 +297,7 @@ $lesson_title = "Lesson $level: " . ($class == 'basic' ? 'Basic ' : ($class == '
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="class.php" class="nav-item active">
@@ -353,132 +318,97 @@ $lesson_title = "Lesson $level: " . ($class == 'basic' ? 'Basic ' : ($class == '
                 </a>
             </div>
             <div class="user-info">
-                <div>
-                    <?php echo $username; ?>
-                    <div class="user-level"><?php echo $class_title; ?></div>
-                </div>
+                <?php echo $username; ?>
             </div>
         </div>
         
+        <a href="class.php" class="back-button">
+            <i class="fas fa-arrow-left"></i> Back
+        </a>
+        
         <div class="main-content">
-            <div class="level-header">
-                <h1 class="level-title"><?php echo $class_title; ?> Class - Level <?php echo $level; ?></h1>
-                <a href="class_detail.php?level=<?php echo $class; ?>" class="back-button">
-                    <i class="fas fa-arrow-left"></i>
-                    Back to Levels
+            <h1 class="class-title"><?php echo ucfirst($class_level); ?> class</h1>
+            
+            <div style="margin-bottom: 20px;">
+                <a href="leaderboard.php?level=<?php echo $class_level; ?>" class="leaderboard-button" style="background-color: #3f6791; color: white; padding: 10px 15px; border-radius: 5px; text-decoration: none; display: inline-flex; align-items: center; gap: 5px;">
+                    <i class="fas fa-trophy"></i> View Leaderboard
                 </a>
             </div>
             
-            <div class="level-content">
-                <div class="level-info">
-                    <div class="info-item">
-                        <div class="info-label">Class</div>
-                        <div class="info-value"><?php echo $class_title; ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Level</div>
-                        <div class="info-value"><?php echo $level; ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Difficulty</div>
-                        <div class="info-value"><?php echo $difficulty; ?></div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Estimated Time</div>
-                        <div class="info-value"><?php echo ($level * 5); ?> mins</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Status</div>
-                        <div class="info-value"><?php echo $level_completed ? "Completed" : "Not Completed"; ?></div>
-                    </div>
-                </div>
-                
-                <?php if (isset($_GET['completed']) && $_GET['completed'] == 1): ?>
-                <div class="completion-status">
-                    <i class="fas fa-check-circle"></i>
-                    Level marked as completed successfully!
-                </div>
-                <?php endif; ?>
-                
-                <div class="lesson-section">
-                    <h2 class="lesson-title"><?php echo $lesson_title; ?></h2>
-                    <p>This is the content for <?php echo $class_title; ?> class, level <?php echo $level; ?>. In a real application, this would contain the actual lesson material with text, images, and interactive elements.</p>
-                    <p style="margin-top: 15px;">The difficulty increases as you progress through levels and move to more advanced classes.</p>
-                </div>
-                
-                <div class="exercise-section">
-                    <h2 class="exercise-title">Practice Exercises</h2>
+            <div class="level-grid">
+                <?php 
+                // Display 15 levels
+                for ($i = 1; $i <= 15; $i++): 
+                    // Check if this level should be unlocked based on previous level completion
+                    $is_locked = true;
                     
-                    <div class="exercise-item">
-                        <div class="exercise-question">Exercise 1: Sample question related to this level's content?</div>
-                        <div class="options">
-                            <label class="option">
-                                <input type="radio" name="exercise1" value="option1">
-                                Option 1
-                            </label>
-                            <label class="option">
-                                <input type="radio" name="exercise1" value="option2">
-                                Option 2
-                            </label>
-                            <label class="option">
-                                <input type="radio" name="exercise1" value="option3">
-                                Option 3
-                            </label>
-                            <label class="option">
-                                <input type="radio" name="exercise1" value="option4">
-                                Option 4
-                            </label>
+                    if ($i == 1) {
+                        // Level 1 is always unlocked
+                        $is_locked = false;
+                    } else if ($class_level == 'basic' && $i <= 10) {
+                        // For basic class levels 2-10, check if previous level is completed
+                        $is_locked = !isset($user_progress[$i-1]) || !$user_progress[$i-1];
+                    } else if ($class_level == 'intermediate' && $i <= 10) {
+                        // For intermediate class levels 2-10, check if previous level is completed
+                        $is_locked = !isset($user_progress[$i-1]) || !$user_progress[$i-1];
+                    } else if ($class_level == 'advanced' && $i <= 10) {
+                        // For advanced class levels 2-10, check if previous level is completed
+                        $is_locked = !isset($user_progress[$i-1]) || !$user_progress[$i-1];
+                    } else if ($i > 10 && $class_level == 'basic') {
+                        // Levels beyond 10 are always locked for basic
+                        $is_locked = true;
+                    } else if ($i > 10 && $class_level == 'intermediate') {
+                        // Levels beyond 10 are always locked for intermediate
+                        $is_locked = true;
+                    } else if ($i > 10 && $class_level == 'advanced') {
+                        // Levels beyond 10 are always locked for advanced
+                        $is_locked = true;
+                    } else {
+                        // For other classes, only level 1 is unlocked
+                        $is_locked = ($i > 1);
+                    }
+                    
+                    // Set URL based on class level and if locked
+                    if ($is_locked) {
+                        $level_url = "javascript:void(0)";
+                    } else {
+                        // For basic levels 1-10, use the basic_levels.php file
+                        if ($class_level == 'basic' && $i <= 10) {
+                            $level_url = "basic_levels.php?level={$i}";
+                        } 
+                        // For intermediate levels 1-10, use the intermediate_levels.php file
+                        else if ($class_level == 'intermediate' && $i <= 10) {
+                            $level_url = "intermediate_levels.php?level={$i}";
+                        }
+                        // For advanced levels 1-10, use the advanced_levels.php file
+                        else if ($class_level == 'advanced' && $i <= 10) {
+                            $level_url = "advanced_levels.php?level={$i}";
+                        }
+                        else {
+                            $level_url = "content.php?level={$class_level}&number={$i}";
+                        }
+                    }
+                    
+                    // Mark level as completed if it exists in user_progress
+                    $is_completed = isset($user_progress[$i]) && $user_progress[$i];
+                    
+                    $level_class = $is_locked ? "level-item level-locked" : "level-item";
+                ?>
+                    <a href="<?php echo $level_url; ?>" class="<?php echo $level_class; ?>">
+                        <div class="level-circle">
+                            <?php if ($is_locked): ?>
+                                <div class="lock-overlay">
+                                    <i class="fas fa-lock"></i>
+                                </div>
+                            <?php elseif ($is_completed): ?>
+                                <i class="fas fa-check"></i>
+                            <?php else: ?>
+                                <i class="fas fa-graduation-cap"></i>
+                            <?php endif; ?>
                         </div>
-                    </div>
-                    
-                    <div class="exercise-item">
-                        <div class="exercise-question">Exercise 2: Another sample question for practice?</div>
-                        <div class="options">
-                            <label class="option">
-                                <input type="radio" name="exercise2" value="option1">
-                                Option 1
-                            </label>
-                            <label class="option">
-                                <input type="radio" name="exercise2" value="option2">
-                                Option 2
-                            </label>
-                            <label class="option">
-                                <input type="radio" name="exercise2" value="option3">
-                                Option 3
-                            </label>
-                            <label class="option">
-                                <input type="radio" name="exercise2" value="option4">
-                                Option 4
-                            </label>
-                        </div>
-                    </div>
-                </div>
-                
-                <form method="post" action="">
-                    <button type="submit" name="mark_completed" class="complete-button <?php echo $level_completed ? 'completed' : ''; ?>" <?php echo $level_completed ? 'disabled' : ''; ?>>
-                        <?php if (!$level_completed): ?>
-                            <i class="fas fa-check"></i> Mark as Completed
-                        <?php else: ?>
-                            <i class="fas fa-check-double"></i> Already Completed
-                        <?php endif; ?>
-                    </button>
-                </form>
-                
-                <div class="navigation-buttons">
-                    <?php if ($level > 1): ?>
-                        <a href="level_content.php?class=<?php echo $class; ?>&level=<?php echo $level-1; ?>" class="nav-button prev-button">
-                            <i class="fas fa-arrow-left"></i>
-                            Previous Level
-                        </a>
-                    <?php else: ?>
-                        <div></div>
-                    <?php endif; ?>
-                    
-                    <a href="level_content.php?class=<?php echo $class; ?>&level=<?php echo $level+1; ?>" class="nav-button next-button">
-                        Next Level
-                        <i class="fas fa-arrow-right"></i>
+                        <div class="level-number">Level <?php echo $i; ?></div>
                     </a>
-                </div>
+                <?php endfor; ?>
             </div>
         </div>
     </div>

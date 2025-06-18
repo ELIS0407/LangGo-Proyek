@@ -31,6 +31,10 @@ if ($row = mysqli_fetch_assoc($result)) {
     }
 }
 
+if ($user_id && (!isset($_SESSION['user_id']) || $_SESSION['user_id'] !== $user_id)) {
+    $_SESSION['user_id'] = $user_id;
+}
+
 $quiz_score = 0;
 if ($user_id) {
     $stmt = mysqli_prepare($conn, "SELECT SUM(score) as total_score FROM quiz_attempts WHERE user_id = ?");
@@ -44,51 +48,85 @@ if ($user_id) {
 }
 
 $level = 1;
-if ($quiz_score >= 100) {
-    $level = floor($quiz_score / 10);
+if ($user_id) {
+    $check_table = mysqli_query($conn, "SHOW TABLES LIKE 'user_progress'");
+    if (mysqli_num_rows($check_table) > 0) {
+        $level_query = "SELECT COUNT(*) as total_levels FROM user_progress 
+                       WHERE user_id = ? AND completed = TRUE";
+        $stmt = mysqli_prepare($conn, $level_query);
+        mysqli_stmt_bind_param($stmt, "i", $user_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        
+        if ($row = mysqli_fetch_assoc($result)) {
+            if ($row['total_levels'] > 0) {
+                $level = $row['total_levels'] + 1;
+            }
+        }
+    } else {
+        if ($quiz_score >= 100) {
+            $level = floor($quiz_score / 10);
+        }
+    }
+}
+
+if ($level < 10 && $quiz_score > 0) {
+    $calculated_level = floor($quiz_score / 10);
+    if ($calculated_level > $level) {
+        $level = $calculated_level;
+    }
+}
+
+if ($level < 1) {
+    $level = 1;
 }
 
 if ($user_id) {
-    $stmt = mysqli_prepare($conn, "
-        SELECT q.class_level 
-        FROM quiz_attempts qa
-        JOIN quizzes q ON qa.quiz_id = q.id
-        WHERE qa.user_id = ?
-        ORDER BY qa.completed_at DESC
-        LIMIT 1
-    ");
-    mysqli_stmt_bind_param($stmt, "i", $user_id);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
-    
-    if ($row = mysqli_fetch_assoc($result)) {
-        $level_text = strtoupper($row['class_level']);
+    $check_table = mysqli_query($conn, "SHOW TABLES LIKE 'user_progress'");
+    if (mysqli_num_rows($check_table) > 0) {
+        $stmt = mysqli_prepare($conn, "
+            SELECT class_level 
+            FROM user_progress 
+            WHERE user_id = ? AND completed = TRUE 
+            ORDER BY FIELD(class_level, 'advanced', 'intermediate', 'basic') 
+            LIMIT 1
+        ");
+        mysqli_stmt_bind_param($stmt, "i", $user_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        
+        if ($row = mysqli_fetch_assoc($result)) {
+            $level_text = strtoupper($row['class_level']);
+        }
+    } else {
+        $stmt = mysqli_prepare($conn, "
+            SELECT q.class_level 
+            FROM quiz_attempts qa
+            JOIN quizzes q ON qa.quiz_id = q.id
+            WHERE qa.user_id = ?
+            ORDER BY qa.completed_at DESC
+            LIMIT 1
+        ");
+        mysqli_stmt_bind_param($stmt, "i", $user_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        
+        if ($row = mysqli_fetch_assoc($result)) {
+            $level_text = strtoupper($row['class_level']);
+        }
     }
 }
 
 $days_of_week = ['senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu', 'minggu'];
 $progress_data = array_fill_keys($days_of_week, 0);
+$actual_counts = array_fill_keys($days_of_week, 0);
 
 if ($user_id) {
-    $week_start = date('Y-m-d', strtotime('monday this week'));
-    $week_end = date('Y-m-d', strtotime('sunday this week'));
+    include_once "../user_activity_tracker.php";
+    $actual_counts = get_user_weekly_activity($user_id, $conn);
     
-    $stmt = mysqli_prepare($conn, "
-        SELECT 
-            LOWER(DATE_FORMAT(completed_at, '%W')) as day_name, 
-            COUNT(*) as attempt_count
-        FROM quiz_attempts
-        WHERE user_id = ? AND completed_at BETWEEN ? AND ?
-        GROUP BY day_name
-    ");
-    mysqli_stmt_bind_param($stmt, "iss", $user_id, $week_start, $week_end);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
-    
-    while ($row = mysqli_fetch_assoc($result)) {
-        if (isset($progress_data[$row['day_name']])) {
-            $progress_data[$row['day_name']] = $row['attempt_count'] * 50; // Scale for visualization
-        }
+    foreach ($actual_counts as $day => $count) {
+        $progress_data[$day] = min($count * 10, 200);
     }
 }
 ?>
@@ -134,7 +172,7 @@ if ($user_id) {
         }
         
         .logo img {
-            height: 50px;
+            height: 65px;
             margin-right: 10px;
         }
         
@@ -309,28 +347,52 @@ if ($user_id) {
         }
         
         .chart-container {
-            height: 250px;
+            height: 300px;
             display: flex;
             align-items: flex-end;
             justify-content: space-between;
-            padding-top: 20px;
+            padding: 30px 20px 20px 20px;
             border-bottom: 1px solid #ddd;
+            position: relative;
         }
         
         .chart-bar {
-            width: 40px;
+            width: 60px;
             background-color: #ccc;
-            border-radius: 5px 5px 0 0;
+            border-radius: 8px 8px 0 0;
             position: relative;
+            transition: all 0.3s ease;
+            min-height: 5px;
+        }
+        
+        .chart-bar:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
         
         .chart-label {
             position: absolute;
-            bottom: -25px;
+            bottom: -30px;
             left: 50%;
             transform: translateX(-50%);
-            font-size: 12px;
+            font-size: 13px;
             color: #666;
+            font-weight: 500;
+            text-transform: capitalize;
+        }
+        
+        .chart-value {
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            background: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         
         .bar-senin {
@@ -501,7 +563,7 @@ if ($user_id) {
     <div class="container">
         <div class="header">
             <div class="logo">
-                <img src="../Logo-LangGo.png" alt="LangGo Logo">
+                <img src="../assets/img/Logo-LangGo.png" alt="LangGo Logo">
             </div>
             <div class="nav-menu">
                 <a href="class.php" class="nav-item">
@@ -591,27 +653,48 @@ if ($user_id) {
                 </div>
                 
                 <div class="progress-section">
-                    <div class="progress-title">Progress Belajar</div>
+                    <div class="progress-title">Progress Belajar Minggu Ini</div>
                     <div class="chart-container">
                         <div class="chart-bar bar-senin">
+                            <?php if ($actual_counts['senin'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['senin']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Senin</div>
                         </div>
                         <div class="chart-bar bar-selasa">
+                            <?php if ($actual_counts['selasa'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['selasa']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Selasa</div>
                         </div>
                         <div class="chart-bar bar-rabu">
+                            <?php if ($actual_counts['rabu'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['rabu']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Rabu</div>
                         </div>
                         <div class="chart-bar bar-kamis">
+                            <?php if ($actual_counts['kamis'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['kamis']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Kamis</div>
                         </div>
                         <div class="chart-bar bar-jumat">
+                            <?php if ($actual_counts['jumat'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['jumat']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Jumat</div>
                         </div>
                         <div class="chart-bar bar-sabtu">
+                            <?php if ($actual_counts['sabtu'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['sabtu']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Sabtu</div>
                         </div>
                         <div class="chart-bar bar-minggu">
+                            <?php if ($actual_counts['minggu'] > 0): ?>
+                                <div class="chart-value"><?php echo $actual_counts['minggu']; ?></div>
+                            <?php endif; ?>
                             <div class="chart-label">Minggu</div>
                         </div>
                     </div>
@@ -653,12 +736,12 @@ if ($user_id) {
         
         document.querySelector('.eye-icon').addEventListener('click', function() {
             const passwordText = document.querySelector('.password-item div:first-child').childNodes[2];
-            if (passwordText.textContent.trim() === '*****') {
+            if (passwordText.textContent.trim() === '*') {
                 passwordText.textContent = 'Password tersembunyi';
                 this.classList.remove('fa-eye');
                 this.classList.add('fa-eye-slash');
             } else {
-                passwordText.textContent = '*****';
+                passwordText.textContent = '*';
                 this.classList.remove('fa-eye-slash');
                 this.classList.add('fa-eye');
             }
@@ -727,4 +810,4 @@ if ($user_id) {
         }
     </script>
 </body>
-</html> 
+</html>
